@@ -132,20 +132,32 @@ impl SaveFile {
             Difficult((u8, u8, usize)),
         }
 
-        (1..=30)
+        // Some Pokemon data falls cleanly into a single memory section, some Pokemon data is
+        // partitioned over multiple sections (with metadata in between and maybe wrapped
+        // around thanks to the section rotation)
+
+        // First, we classify and extract relevant data for each case
+        let (simple, difficult): (Vec<ReadDifficulty>, Vec<ReadDifficulty>) = (1..=30)
             .into_iter()
-            .filter_map(|slot| {
+            .map(|slot| {
                 let (section_id, relative_offset) =
                     compute_section_id_and_offset_for_box_slot(box_number, slot).unwrap();
                 let section_offset = self.get_offset_for_section(section_id) as usize;
                 if relative_offset + 80 > SECTION_DATA_SIZE {
-                    eprintln!("Computed a slot which jumps over a gap in sections which we're not currently supporting");
-                    None
+                    ReadDifficulty::Difficult((slot, section_id, relative_offset))
                 } else {
-                    Some((slot, section_offset + relative_offset))
+                    ReadDifficulty::Simple((slot, section_offset + relative_offset))
                 }
             })
-            .filter_map(|(slot, pk3_offset)| {
+            .partition(|entry| matches!(entry, ReadDifficulty::Simple(_)));
+
+        simple
+            .into_iter()
+            .filter_map(|entry| {
+                // Simple is easy: if there's any non-zero data, try to parse a Pokemon
+                let ReadDifficulty::Simple((slot, pk3_offset)) = entry else {
+                    return None;
+                };
                 let pk3_data = &self.full_contents[pk3_offset..pk3_offset + 80];
                 if pk3_data.iter().any(|byte| *byte != 0x00) {
                     Some((slot, pk3_offset))
@@ -157,6 +169,29 @@ impl SaveFile {
                 let pk3_data = &self.full_contents[pk3_offset..pk3_offset + 80];
                 Ok((slot, Pokemon::from_pk3(pk3_data)?))
             })
+            .chain(difficult.into_iter().filter_map(|entry| {
+                // Difficult is annoying: we read in two pieces
+                let ReadDifficulty::Difficult((slot, start_section_id, relative_offset)) = entry else {
+                    return None;
+                };
+                let mut pk3_data = vec![0u8; 80];
+                // First read from the first section up until the end of the section data
+                let section_offset = self.get_offset_for_section(start_section_id) as usize;
+                let bytes_from_first_section = SECTION_DATA_SIZE - relative_offset;
+                (&mut pk3_data[..bytes_from_first_section]).copy_from_slice(&self.full_contents[section_offset + relative_offset..section_offset + SECTION_DATA_SIZE]);
+                // Next we grab the trailing part and copy that as well
+                let bytes_from_next_section = 80 - bytes_from_first_section;
+                let section_offset = self.get_offset_for_section(start_section_id + 1) as usize;
+                (&mut pk3_data[bytes_from_first_section..]).copy_from_slice(&self.full_contents[section_offset..section_offset+bytes_from_next_section]);
+                // Now we can check if there's even valid data here and attempt to parse
+                if pk3_data.iter().any(|byte| *byte != 0x00) {
+                    Some((slot, pk3_data))
+                } else {
+                    None
+                }
+            }).map(|(slot, pk3_data)| {
+                Ok((slot, Pokemon::from_pk3(&pk3_data[..])?))
+            }))
             .collect::<io::Result<Vec<_>>>()
     }
 
