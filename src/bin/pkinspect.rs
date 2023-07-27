@@ -26,13 +26,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.location == "party" {
         let party_pkmn = save_file.get_party()?;
         for pkmn in party_pkmn {
-            println!("{}", pkmn.species);
+            println!("{pkmn:?}");
         }
     } else if args.location.starts_with("box") {
         let box_number = args.location[3..].parse::<u8>()?;
         let boxed_pkmn = save_file.get_box(box_number)?;
         for (slot, pkmn) in boxed_pkmn {
-            println!("Slot {slot}: {}", pkmn.species);
+            println!("Slot {slot}: {pkmn:?}");
         }
     }
 
