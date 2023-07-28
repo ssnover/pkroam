@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{pokemon:?}");
             let pk3_data = pokemon.to_pk3();
             println!("Saving to {}", args.dest.display());
-            std::fs::write(args.dest, &pk3_data)?;
+            std::fs::write(args.dest, pk3_data)?;
             save_file.write_to_file(&args.sav)?;
         }
         None => {

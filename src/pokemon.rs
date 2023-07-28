@@ -73,11 +73,10 @@ impl Pokemon {
             + SUBSTRUCTURE_OFFSET;
         cursor.seek(SeekFrom::Start(offset))?;
         let mut moves = [0u16; 4];
-        (0..4).into_iter().for_each(|idx| {
+        (0..4).for_each(|idx| {
             moves[idx] = cursor.read_u16::<LittleEndian>().unwrap();
         });
         let _pp = (0..4)
-            .into_iter()
             .map(|_| cursor.read_u8().unwrap())
             .collect::<Vec<_>>();
 
@@ -85,11 +84,8 @@ impl Pokemon {
             + SUBSTRUCTURE_OFFSET;
         cursor.seek(SeekFrom::Start(offset))?;
         let mut evs = [0u8; 6];
-        (0..6)
-            .into_iter()
-            .for_each(|idx| evs[idx] = cursor.read_u8().unwrap());
+        (0..6).for_each(|idx| evs[idx] = cursor.read_u8().unwrap());
         let _contest_stats = (0..6)
-            .into_iter()
             .map(|_| cursor.read_u8().unwrap())
             .collect::<Vec<_>>();
 
@@ -101,9 +97,7 @@ impl Pokemon {
         let _origin_info = cursor.read_u16::<LittleEndian>()?;
         let ivs_egg_ability_blob = cursor.read_u32::<LittleEndian>()?;
         let mut ivs = [0u8; 6];
-        (0..6)
-            .into_iter()
-            .for_each(|idx| ivs[idx] = ((ivs_egg_ability_blob >> (5 * idx)) & 0b11111) as u8);
+        (0..6).for_each(|idx| ivs[idx] = ((ivs_egg_ability_blob >> (5 * idx)) & 0b11111) as u8);
         let is_egg = ((ivs_egg_ability_blob >> 30) & 0b1) != 0;
         let ability = ((ivs_egg_ability_blob >> 31) & 0b1) as u8;
         let _ribbons_obedience_data = cursor.read_u32::<LittleEndian>()?;

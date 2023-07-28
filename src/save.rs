@@ -113,7 +113,6 @@ impl SaveFile {
 
         let mut pk3_buffer = [0u8; crate::pokemon::PK3_SIZE_PARTY];
         (0..team_size)
-            .into_iter()
             .map(|_| {
                 cursor.read_exact(&mut pk3_buffer)?;
                 Pokemon::from_pk3(&pk3_buffer)
@@ -123,7 +122,6 @@ impl SaveFile {
 
     pub fn get_box(&self, box_number: u8) -> io::Result<Vec<(u8, Pokemon)>> {
         let box_pokemon = (1..=30)
-            .into_iter()
             .map(|slot| self.get_pokemon_from_box(box_number, slot))
             .collect::<io::Result<Vec<_>>>()?;
         Ok(box_pokemon
@@ -141,7 +139,7 @@ impl SaveFile {
             let checksum = compute_section_checksum(&section_data[..SECTION_DATA_SIZE])?;
 
             let mut cursor = Cursor::new(section_data);
-            cursor.seek(SeekFrom::Start((SECTION_CHECKSUM_OFFSET) as u64))?;
+            cursor.seek(SeekFrom::Start(SECTION_CHECKSUM_OFFSET))?;
             let actual_checksum = cursor.read_u16::<LittleEndian>()?;
 
             if checksum != actual_checksum {
@@ -161,7 +159,7 @@ impl SaveFile {
             let checksum = compute_section_checksum(&section_data[..SECTION_DATA_SIZE])?;
 
             let mut cursor = Cursor::new(section_data);
-            cursor.seek(SeekFrom::Start((SECTION_CHECKSUM_OFFSET) as u64))?;
+            cursor.seek(SeekFrom::Start(SECTION_CHECKSUM_OFFSET))?;
             cursor.write_u16::<LittleEndian>(checksum)?;
         }
 
@@ -187,7 +185,7 @@ impl SaveFile {
             // First read from the first section up until the end of the section data
             let section_offset = self.get_offset_for_section(start_section_id) as usize;
             let bytes_from_first_section = SECTION_DATA_SIZE - relative_offset;
-            (&mut pk3_data[..bytes_from_first_section]).copy_from_slice(
+            pk3_data[..bytes_from_first_section].copy_from_slice(
                 &self.full_contents
                     [section_offset + relative_offset..section_offset + SECTION_DATA_SIZE],
             );
@@ -195,7 +193,7 @@ impl SaveFile {
             // Next we grab the trailing part and copy that as well
             let bytes_from_next_section = pokemon::PK3_SIZE_BOX - bytes_from_first_section;
             let section_offset = self.get_offset_for_section(start_section_id + 1) as usize;
-            (&mut pk3_data[bytes_from_first_section..]).copy_from_slice(
+            pk3_data[bytes_from_first_section..].copy_from_slice(
                 &self.full_contents[section_offset..section_offset + bytes_from_next_section],
             );
 
@@ -341,9 +339,7 @@ fn determine_latest_game_save_offset(save_data: &[u8]) -> std::io::Result<u64> {
 
     let offset = if save_index_a == 0xffffffff {
         SAVE_B_OFFSET
-    } else if save_index_b == 0xffffffff {
-        SAVE_A_OFFSET
-    } else if save_index_a > save_index_b {
+    } else if save_index_b == 0xffffffff || save_index_a > save_index_b {
         SAVE_A_OFFSET
     } else {
         SAVE_B_OFFSET
@@ -403,7 +399,7 @@ fn compute_section_id_and_offset_for_box_slot(
 ) -> Option<(u8, usize)> {
     let box_number = box_number as usize;
     let box_entry = box_entry as usize;
-    if box_number < 1 || box_number > 16 || box_entry < 1 || box_entry > 30 {
+    if !(1..=16).contains(&box_number) || !(1..=30).contains(&box_entry) {
         eprintln!("Invalid box entry: {box_entry} in box number: {box_number}");
         return None;
     }
