@@ -3,10 +3,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use byteorder::{LittleEndian, ReadBytesExt};
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
 use super::{decode_text, TrainerId};
-use crate::Pokemon;
+use crate::{pokemon, Pokemon};
 
 pub struct SaveFile {
     _source: PathBuf,
@@ -111,7 +111,7 @@ impl SaveFile {
         cursor.seek(SeekFrom::Start(section_offset + team_size_offset))?;
         let team_size = cursor.read_u32::<LittleEndian>()?;
 
-        let mut pk3_buffer = [0u8; crate::pokemon::PK3_SIZE];
+        let mut pk3_buffer = [0u8; crate::pokemon::PK3_SIZE_PARTY];
         (0..team_size)
             .into_iter()
             .map(|_| {
@@ -122,72 +122,15 @@ impl SaveFile {
     }
 
     pub fn get_box(&self, box_number: u8) -> io::Result<Vec<(u8, Pokemon)>> {
-        enum ReadDifficulty {
-            Simple((u8, usize)),
-            Difficult((u8, u8, usize)),
-        }
-
-        // Some Pokemon data falls cleanly into a single memory section, some Pokemon data is
-        // partitioned over multiple sections (with metadata in between and maybe wrapped
-        // around thanks to the section rotation)
-
-        // First, we classify and extract relevant data for each case
-        let (simple, difficult): (Vec<ReadDifficulty>, Vec<ReadDifficulty>) = (1..=30)
+        let box_pokemon = (1..=30)
             .into_iter()
-            .map(|slot| {
-                let (section_id, relative_offset) =
-                    compute_section_id_and_offset_for_box_slot(box_number, slot).unwrap();
-                let section_offset = self.get_offset_for_section(section_id) as usize;
-                if relative_offset + 80 > SECTION_DATA_SIZE {
-                    ReadDifficulty::Difficult((slot, section_id, relative_offset))
-                } else {
-                    ReadDifficulty::Simple((slot, section_offset + relative_offset))
-                }
-            })
-            .partition(|entry| matches!(entry, ReadDifficulty::Simple(_)));
-
-        simple
+            .map(|slot| self.get_pokemon_from_box(box_number, slot))
+            .collect::<io::Result<Vec<_>>>()?;
+        Ok(box_pokemon
             .into_iter()
-            .filter_map(|entry| {
-                // Simple is easy: if there's any non-zero data, try to parse a Pokemon
-                let ReadDifficulty::Simple((slot, pk3_offset)) = entry else {
-                    return None;
-                };
-                let pk3_data = &self.full_contents[pk3_offset..pk3_offset + 80];
-                if pk3_data.iter().any(|byte| *byte != 0x00) {
-                    Some((slot, pk3_offset))
-                } else {
-                    None
-                }
-            })
-            .map(|(slot, pk3_offset)| {
-                let pk3_data = &self.full_contents[pk3_offset..pk3_offset + 80];
-                Ok((slot, Pokemon::from_pk3(pk3_data)?))
-            })
-            .chain(difficult.into_iter().filter_map(|entry| {
-                // Difficult is annoying: we read in two pieces
-                let ReadDifficulty::Difficult((slot, start_section_id, relative_offset)) = entry else {
-                    return None;
-                };
-                let mut pk3_data = vec![0u8; 80];
-                // First read from the first section up until the end of the section data
-                let section_offset = self.get_offset_for_section(start_section_id) as usize;
-                let bytes_from_first_section = SECTION_DATA_SIZE - relative_offset;
-                (&mut pk3_data[..bytes_from_first_section]).copy_from_slice(&self.full_contents[section_offset + relative_offset..section_offset + SECTION_DATA_SIZE]);
-                // Next we grab the trailing part and copy that as well
-                let bytes_from_next_section = 80 - bytes_from_first_section;
-                let section_offset = self.get_offset_for_section(start_section_id + 1) as usize;
-                (&mut pk3_data[bytes_from_first_section..]).copy_from_slice(&self.full_contents[section_offset..section_offset+bytes_from_next_section]);
-                // Now we can check if there's even valid data here and attempt to parse
-                if pk3_data.iter().any(|byte| *byte != 0x00) {
-                    Some((slot, pk3_data))
-                } else {
-                    None
-                }
-            }).map(|(slot, pk3_data)| {
-                Ok((slot, Pokemon::from_pk3(&pk3_data[..])?))
-            }))
-            .collect::<io::Result<Vec<_>>>()
+            .enumerate()
+            .filter_map(|(idx, pkmn)| pkmn.map(|pkmn| (1 + idx as u8, pkmn)))
+            .collect())
     }
 
     pub fn verify_sections(&self) -> io::Result<()> {
@@ -200,6 +143,7 @@ impl SaveFile {
             let mut cursor = Cursor::new(section_data);
             cursor.seek(SeekFrom::Start((SECTION_CHECKSUM_OFFSET) as u64))?;
             let actual_checksum = cursor.read_u16::<LittleEndian>()?;
+
             if checksum != actual_checksum {
                 eprintln!("Computed checksum 0x{checksum:x} for section {section_id}, but checksum was 0x{actual_checksum:x}");
                 return Err(std::io::ErrorKind::InvalidData.into());
@@ -207,6 +151,141 @@ impl SaveFile {
         }
 
         Ok(())
+    }
+
+    fn recompute_checksums(&mut self) -> io::Result<()> {
+        for section_id in 0..14 {
+            let section_offset = self.get_offset_for_section(section_id) as usize;
+            let section_data =
+                &mut self.full_contents[section_offset..section_offset + SECTION_SIZE as usize];
+            let checksum = compute_section_checksum(&section_data[..SECTION_DATA_SIZE])?;
+
+            let mut cursor = Cursor::new(section_data);
+            cursor.seek(SeekFrom::Start((SECTION_CHECKSUM_OFFSET) as u64))?;
+            cursor.write_u16::<LittleEndian>(checksum)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn get_pokemon_from_box(
+        &self,
+        box_number: u8,
+        slot_number: u8,
+    ) -> io::Result<Option<Pokemon>> {
+        // Some Pokemon data falls cleanly into a single memory section, some Pokemon data is
+        // partitioned over multiple sections (with metadata in between and maybe wrapped
+        // around thanks to the section rotation)
+
+        let (section_id, relative_offset) =
+            compute_section_id_and_offset_for_box_slot(box_number, slot_number).unwrap();
+        let section_offset = self.get_offset_for_section(section_id) as usize;
+        if relative_offset + pokemon::PK3_SIZE_BOX > SECTION_DATA_SIZE {
+            let start_section_id = section_id;
+            let mut pk3_data = vec![0u8; pokemon::PK3_SIZE_BOX];
+
+            // First read from the first section up until the end of the section data
+            let section_offset = self.get_offset_for_section(start_section_id) as usize;
+            let bytes_from_first_section = SECTION_DATA_SIZE - relative_offset;
+            (&mut pk3_data[..bytes_from_first_section]).copy_from_slice(
+                &self.full_contents
+                    [section_offset + relative_offset..section_offset + SECTION_DATA_SIZE],
+            );
+
+            // Next we grab the trailing part and copy that as well
+            let bytes_from_next_section = pokemon::PK3_SIZE_BOX - bytes_from_first_section;
+            let section_offset = self.get_offset_for_section(start_section_id + 1) as usize;
+            (&mut pk3_data[bytes_from_first_section..]).copy_from_slice(
+                &self.full_contents[section_offset..section_offset + bytes_from_next_section],
+            );
+
+            // Now we can check if there's even valid data here and attempt to parse
+            if pk3_data.iter().any(|byte| *byte != 0x00) {
+                Ok(Some(Pokemon::from_pk3(&pk3_data[..])?))
+            } else {
+                Ok(None)
+            }
+        } else {
+            let pk3_offset = section_offset + relative_offset;
+            let pk3_data = &self.full_contents[pk3_offset..pk3_offset + pokemon::PK3_SIZE_BOX];
+            if pk3_data.iter().any(|byte| *byte != 0x00) {
+                Ok(Some(Pokemon::from_pk3(pk3_data)?))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+
+    pub fn take_pokemon_from_box(
+        &mut self,
+        box_number: u8,
+        slot_number: u8,
+    ) -> io::Result<Option<Pokemon>> {
+        let pkmn = self.get_pokemon_from_box(box_number, slot_number)?;
+        self.clear_box_position(box_number, slot_number)?;
+        self.recompute_checksums()?;
+        Ok(pkmn)
+    }
+
+    fn clear_box_position(&mut self, box_number: u8, slot_number: u8) -> io::Result<()> {
+        let cleared_pk3 = [0u8; pokemon::PK3_SIZE_BOX];
+        let _ = self.put_pokemon_in_box(box_number, slot_number, &cleared_pk3, true)?;
+        Ok(())
+    }
+
+    pub fn put_pokemon_in_box(
+        &mut self,
+        box_number: u8,
+        slot_number: u8,
+        pk3_data: &[u8],
+        force: bool,
+    ) -> io::Result<bool> {
+        if pk3_data.len() != pokemon::PK3_SIZE_BOX {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+
+        let (section_id, relative_offset) =
+            compute_section_id_and_offset_for_box_slot(box_number, slot_number).unwrap();
+        let section_offset = self.get_offset_for_section(section_id) as usize;
+
+        if relative_offset + pokemon::PK3_SIZE_BOX > SECTION_DATA_SIZE {
+            let bytes_from_first_section = SECTION_DATA_SIZE - relative_offset;
+            let bytes_from_next_section = pokemon::PK3_SIZE_BOX - bytes_from_first_section;
+
+            let pokemon_present = self.full_contents
+                [section_offset + relative_offset..section_offset + SECTION_DATA_SIZE]
+                .iter()
+                .any(|byte| *byte != 0x00)
+                || self.full_contents[section_offset..section_offset + bytes_from_next_section]
+                    .iter()
+                    .any(|byte| *byte != 0x00);
+            if pokemon_present && !force {
+                return Ok(false);
+            }
+
+            // First clear the first section up until the end of the section data
+            self.full_contents
+                [section_offset + relative_offset..section_offset + SECTION_DATA_SIZE]
+                .copy_from_slice(&pk3_data[..bytes_from_first_section]);
+
+            // Next we grab the trailing part and clear that as well
+            let section_offset = self.get_offset_for_section(section_id + 1) as usize;
+            self.full_contents[section_offset..section_offset + bytes_from_next_section]
+                .copy_from_slice(&pk3_data[bytes_from_first_section..]);
+            Ok(true)
+        } else {
+            let pk3_offset = section_offset + relative_offset;
+            let existing_pk3_data =
+                &mut self.full_contents[pk3_offset..pk3_offset + pokemon::PK3_SIZE_BOX];
+            let pokemon_present = existing_pk3_data.iter().any(|byte| *byte != 0x00);
+
+            if pokemon_present && !force {
+                return Ok(false);
+            }
+
+            existing_pk3_data.copy_from_slice(pk3_data);
+            Ok(true)
+        }
     }
 
     fn parse_trainer_info(&self) -> io::Result<(TrainerInfo, GameCode)> {
@@ -244,6 +323,11 @@ impl SaveFile {
             },
             game_code,
         ))
+    }
+
+    pub fn write_to_file(mut self, filepath: impl AsRef<Path>) -> io::Result<()> {
+        self.recompute_checksums()?;
+        std::fs::write(filepath, self.full_contents)
     }
 }
 
@@ -325,9 +409,8 @@ fn compute_section_id_and_offset_for_box_slot(
     }
 
     let absolute_entry = ((box_number - 1) * 30) + (box_entry - 1);
-    const BOXED_PK3_SIZE: usize = 80;
     // Including the 4 bytes at the start of section 5 to make the math easier
-    let absolute_offset = (absolute_entry * BOXED_PK3_SIZE) + 4;
+    let absolute_offset = (absolute_entry * pokemon::PK3_SIZE_BOX) + 4;
     let section_id = 5 + (absolute_offset / SECTION_DATA_SIZE);
     let section_offset = absolute_offset % SECTION_DATA_SIZE;
 

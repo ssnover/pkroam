@@ -1,12 +1,14 @@
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::{
     convert::Infallible,
-    io::{Cursor, Read, Write},
+    io::{Cursor, Read, Seek, SeekFrom, Write},
 };
 
 use super::{decode_text, TrainerId};
 
-pub const PK3_SIZE: usize = 100;
+pub const PK3_SIZE_PARTY: usize = 100;
+pub const PK3_SIZE_BOX: usize = 80;
+const SUBSTRUCTURE_OFFSET: u64 = 32;
 
 #[derive(Clone, Copy, Debug)]
 pub enum Language {
@@ -38,7 +40,7 @@ pub struct Pokemon {
 impl Pokemon {
     pub fn from_pk3(pk3: &[u8]) -> std::io::Result<Self> {
         let mut source_data = pk3.to_owned();
-        decrypt_pk3(&mut source_data[..]);
+        encrypt_decrypt_pk3(&mut source_data[..]);
 
         let mut cursor = Cursor::new(&source_data[..]);
         let personality_value = cursor.read_u32::<LittleEndian>()?;
@@ -56,12 +58,20 @@ impl Pokemon {
         let _markings = cursor.read_u8()?;
         let _checksum = cursor.read_u16::<LittleEndian>()?;
         let _ = cursor.read_u16::<LittleEndian>()?;
+
+        let offset =
+            get_offset_for_substructure(personality_value, Component::Growth) + SUBSTRUCTURE_OFFSET;
+        cursor.seek(SeekFrom::Start(offset))?;
         let species = cursor.read_u16::<LittleEndian>()?;
         let _held_item_id = cursor.read_u16::<LittleEndian>()?;
         let experience = cursor.read_u32::<LittleEndian>()?;
         let _pp_bonuses = cursor.read_u8()?;
         let _friendship = cursor.read_u8()?;
         let _ = cursor.read_u16::<LittleEndian>()?;
+
+        let offset = get_offset_for_substructure(personality_value, Component::Attacks)
+            + SUBSTRUCTURE_OFFSET;
+        cursor.seek(SeekFrom::Start(offset))?;
         let mut moves = [0u16; 4];
         (0..4).into_iter().for_each(|idx| {
             moves[idx] = cursor.read_u16::<LittleEndian>().unwrap();
@@ -70,6 +80,10 @@ impl Pokemon {
             .into_iter()
             .map(|_| cursor.read_u8().unwrap())
             .collect::<Vec<_>>();
+
+        let offset = get_offset_for_substructure(personality_value, Component::EvsConditions)
+            + SUBSTRUCTURE_OFFSET;
+        cursor.seek(SeekFrom::Start(offset))?;
         let mut evs = [0u8; 6];
         (0..6)
             .into_iter()
@@ -78,6 +92,10 @@ impl Pokemon {
             .into_iter()
             .map(|_| cursor.read_u8().unwrap())
             .collect::<Vec<_>>();
+
+        let offset = get_offset_for_substructure(personality_value, Component::Miscellaneous)
+            + SUBSTRUCTURE_OFFSET;
+        cursor.seek(SeekFrom::Start(offset))?;
         let _pokerus_status = cursor.read_u8()?;
         let _met_location = cursor.read_u8()?;
         let _origin_info = cursor.read_u16::<LittleEndian>()?;
@@ -111,6 +129,11 @@ impl Pokemon {
         Ok(pkmn)
     }
 
+    pub fn to_pk3(mut self) -> Vec<u8> {
+        encrypt_decrypt_pk3(&mut self.source_data);
+        self.source_data
+    }
+
     pub fn clear_evs(&mut self) {
         self.evs = [0u8; 6];
         let mut cursor = Cursor::new(&mut self.source_data[..]);
@@ -125,7 +148,37 @@ impl Pokemon {
     }
 }
 
-fn decrypt_pk3(pk3_data: &mut [u8]) {
+enum Component {
+    Growth,
+    Attacks,
+    EvsConditions,
+    Miscellaneous,
+}
+
+fn get_offset_for_substructure(personality_value: u32, component: Component) -> u64 {
+    const COMPONENT_SIZE: u64 = 12;
+    match (component, personality_value % 24) {
+        (Component::Growth, 0..=5) => 0,
+        (Component::Growth, 6 | 7 | 12 | 13 | 18 | 19) => COMPONENT_SIZE,
+        (Component::Growth, 8 | 10 | 14 | 16 | 20 | 22) => COMPONENT_SIZE * 2,
+        (Component::Growth, 9 | 11 | 15 | 17 | 21 | 23) => COMPONENT_SIZE * 3,
+        (Component::Attacks, 6..=11) => 0,
+        (Component::Attacks, 0 | 1 | 14 | 15 | 20 | 21) => COMPONENT_SIZE,
+        (Component::Attacks, 2 | 4 | 12 | 17 | 18 | 23) => COMPONENT_SIZE * 2,
+        (Component::Attacks, 3 | 5 | 13 | 16 | 19 | 22) => COMPONENT_SIZE * 3,
+        (Component::EvsConditions, 12..=17) => 0,
+        (Component::EvsConditions, 2 | 3 | 8 | 9 | 22 | 23) => COMPONENT_SIZE,
+        (Component::EvsConditions, 0 | 5 | 6 | 11 | 19 | 21) => COMPONENT_SIZE * 2,
+        (Component::EvsConditions, 1 | 4 | 7 | 10 | 18 | 20) => COMPONENT_SIZE * 3,
+        (Component::Miscellaneous, 18..=23) => 0,
+        (Component::Miscellaneous, 4 | 5 | 10 | 11 | 16 | 17) => COMPONENT_SIZE,
+        (Component::Miscellaneous, 1 | 3 | 7 | 9 | 13 | 15) => COMPONENT_SIZE * 2,
+        (Component::Miscellaneous, 0 | 2 | 6 | 8 | 12 | 14) => COMPONENT_SIZE * 3,
+        _ => unreachable!(),
+    }
+}
+
+fn encrypt_decrypt_pk3(pk3_data: &mut [u8]) {
     let mut cursor = Cursor::new(&pk3_data);
     let personality_value = cursor.read_u32::<LittleEndian>().unwrap();
     let original_trainer_id = cursor.read_u32::<LittleEndian>().unwrap();
@@ -139,50 +192,6 @@ fn decrypt_pk3(pk3_data: &mut [u8]) {
             pk3_data[idx + byte] ^= decryption_key_buf[byte];
         }
     }
-
-    // Now rearrange the elements
-    let mut rearranged_data = Vec::with_capacity(48);
-    // Growth
-    match personality_value % 24 {
-        0..=5 => rearranged_data.extend_from_slice(&pk3_data[32..44]),
-        6 | 7 | 12 | 13 | 18 | 19 => rearranged_data.extend_from_slice(&pk3_data[44..56]),
-        8 | 10 | 14 | 16 | 20 | 22 => rearranged_data.extend_from_slice(&pk3_data[56..68]),
-        9 | 11 | 15 | 17 | 21 | 23 => rearranged_data.extend_from_slice(&pk3_data[68..80]),
-        24u32..=u32::MAX => unreachable!(),
-    };
-
-    // Attacks
-    match personality_value % 24 {
-        6..=11 => rearranged_data.extend_from_slice(&pk3_data[32..44]),
-        0 | 1 | 14 | 15 | 20 | 21 => rearranged_data.extend_from_slice(&pk3_data[44..56]),
-        2 | 4 | 12 | 17 | 18 | 23 => rearranged_data.extend_from_slice(&pk3_data[56..68]),
-        3 | 5 | 13 | 16 | 19 | 22 => rearranged_data.extend_from_slice(&pk3_data[68..80]),
-        _ => unimplemented!(),
-    };
-
-    // EVs and Condition
-    match personality_value % 24 {
-        12..=17 => rearranged_data.extend_from_slice(&pk3_data[32..44]),
-        2 | 3 | 8 | 9 | 22 | 23 => rearranged_data.extend_from_slice(&pk3_data[44..56]),
-        0 | 5 | 6 | 11 | 19 | 21 => rearranged_data.extend_from_slice(&pk3_data[56..68]),
-        1 | 4 | 7 | 10 | 18 | 20 => rearranged_data.extend_from_slice(&pk3_data[68..80]),
-        _ => unimplemented!(),
-    };
-
-    // Miscellaneous
-    match personality_value % 24 {
-        18..=23 => rearranged_data.extend_from_slice(&pk3_data[32..44]),
-        4 | 5 | 10 | 11 | 16 | 17 => rearranged_data.extend_from_slice(&pk3_data[44..56]),
-        1 | 3 | 7 | 9 | 13 | 15 => rearranged_data.extend_from_slice(&pk3_data[56..68]),
-        0 | 2 | 6 | 8 | 12 | 14 => rearranged_data.extend_from_slice(&pk3_data[68..80]),
-        _ => unimplemented!(),
-    };
-
-    pk3_data[32..80].clone_from_slice(&rearranged_data[..(80 - 32)])
-}
-
-fn encrypt_pk3(pk3_data: &mut [u8]) {
-    todo!()
 }
 
 fn compute_checksum(pk3_unencrypted_data_region: &[u8]) -> u16 {
