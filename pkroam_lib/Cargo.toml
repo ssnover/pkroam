@@ -1,0 +1,14 @@
+[package]
+name = "pkroam"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "pkinspect"
+path = "src/bin/pkinspect.rs"
+
+[dependencies]
+byteorder = "1.4"
+clap = { version = "4.3", features = ["derive"] }
+num-derive = "0.3"
+num-traits = "0.2"
