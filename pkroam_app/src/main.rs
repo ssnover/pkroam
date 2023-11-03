@@ -1,3 +1,4 @@
+use app::start_app_backend;
 use clap::Parser;
 use std::path::PathBuf;
 
@@ -32,6 +33,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Logging to path: {}", &app_paths.get_log_path().display());
     }
     let db_handle = database::DbConn::new(&app_paths.get_database_path())?;
+
+    let (backend_handle, event_sender, app_state) = start_app_backend(db_handle)?;
+    ui::run_app_ui(app_state, event_sender)?;
+
+    backend_handle.quit();
 
     Ok(())
 }

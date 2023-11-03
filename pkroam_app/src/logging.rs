@@ -30,6 +30,9 @@ pub fn initialize(enable_debug: bool, log_dir: impl AsRef<Path>) -> io::Result<(
 
     let mut current_log_file_path = log_dir.as_ref().to_path_buf();
     current_log_file_path.push(format!("pkroam.log"));
+    let mut last_log_file_path = log_dir.as_ref().to_path_buf();
+    last_log_file_path.push(format!("pkroam.log.0"));
+    std::fs::copy(&current_log_file_path, last_log_file_path)?;
 
     std::fs::File::create(&current_log_file_path)?;
     simple_logging::log_to_file(&current_log_file_path, log_level)

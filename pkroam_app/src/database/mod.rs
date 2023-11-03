@@ -1,7 +1,10 @@
-use crate::types::GameSave;
+use crate::types::{Game, GameSave, GameSaveData};
+use num_traits::{FromPrimitive, ToPrimitive};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+
+mod statements;
 
 const CURRENT_DATABASE_SCHEMA_VERSION: i32 = 1;
 
@@ -30,16 +33,7 @@ impl DbConn {
     }
 
     fn initialize_database(&self) -> rusqlite::Result<()> {
-        self.conn.execute(
-            "CREATE TABLE saves (
-                id INTEGER PRIMARY KEY,
-                trainer_name TEXT NOT NULL,
-                trainer_id INTEGER,
-                secret_id INTEGER,
-                save_path TEXT NOT NULL
-            )",
-            (),
-        )?;
+        self.conn.execute(statements::CREATE_TABLE_SAVES, ())?;
 
         set_schema_version(&self.conn, CURRENT_DATABASE_SCHEMA_VERSION)
     }
@@ -49,26 +43,42 @@ impl DbConn {
     }
 
     pub fn get_saves(&self) -> rusqlite::Result<Vec<GameSave>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, trainer_name, trainer_id, secret_id, save_path FROM saves")?;
+        let mut stmt = self.conn.prepare(statements::SELECT_SAVES)?;
         let iter = stmt.query_map([], |row| {
-            let trainer_name: String = row.get(1)?;
-            let save_path: String = row.get(4)?;
+            let trainer_name: String = row.get(2)?;
+            let save_path: String = row.get(5)?;
             Ok(GameSave::new(
                 row.get(0)?,
-                &trainer_name,
-                row.get(2)?,
-                row.get(3)?,
-                PathBuf::from_str(&save_path).unwrap(),
+                GameSaveData::new(
+                    Game::from_u32(row.get(1)?).unwrap(),
+                    &trainer_name,
+                    row.get(3)?,
+                    row.get(4)?,
+                    PathBuf::from_str(&save_path).unwrap(),
+                ),
             ))
         })?;
         iter.collect::<rusqlite::Result<Vec<_>>>()
     }
 
-    pub fn add_new_save(&self, save: &GameSave) -> rusqlite::Result<()> {
-        let _rows_changed = self.conn.execute("INSERT INTO saves (trainer_name, trainer_id, secret_id, save_path) VALUES (?1, ?2, ?3, ?4)",
-            (&save.trainer_name, &save.trainer_id, &save.secret_id, &save.save_path.to_string_lossy()))?;
+    pub fn add_new_save(&self, save: &GameSaveData) -> rusqlite::Result<()> {
+        let _rows_changed = self.conn.execute(
+            statements::INSERT_SAVE_INTO_SAVES,
+            (
+                &save.game.to_u32(),
+                &save.trainer_name,
+                &save.trainer_id,
+                &save.secret_id,
+                &save.save_path.to_string_lossy(),
+            ),
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_save(&self, save_id: u64) -> rusqlite::Result<()> {
+        let _rows_changed = self
+            .conn
+            .execute(statements::DELETE_SAVE_FROM_SAVES, (save_id,))?;
         Ok(())
     }
 }
