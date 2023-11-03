@@ -1,7 +1,7 @@
-pub mod pokemon;
+pub mod pk3;
 pub mod save;
 
-use pokemon::Pokemon;
+use pk3::Pokemon;
 
 #[derive(Clone, Copy, Debug)]
 pub struct TrainerId {

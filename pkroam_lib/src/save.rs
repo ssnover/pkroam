@@ -6,10 +6,10 @@ use std::{
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
 use super::{decode_text, TrainerId};
-use crate::{pokemon, Pokemon};
+use crate::{pk3 as pokemon, Pokemon};
 
 pub struct SaveFile {
-    _source: PathBuf,
+    source: PathBuf,
     full_contents: Vec<u8>,
     latest_save_offset: u64,
     section_rotation: u8,
@@ -24,6 +24,7 @@ const SAVE_B_OFFSET: u64 = 0xE000;
 const SECTION_SIZE: u64 = 0x1000;
 const SECTION_DATA_SIZE: usize = 3968;
 const SECTION_CHECKSUM_OFFSET: u64 = 0x0ff6;
+const NUMBER_OF_SECTIONS: u8 = 14;
 
 #[derive(Clone, Copy)]
 pub enum GameCode {
@@ -66,7 +67,7 @@ impl SaveFile {
                 let section_rotation =
                     determine_section_rotation(latest_save_offset, &full_contents)?;
                 let mut save = SaveFile {
-                    _source: p.as_ref().to_path_buf(),
+                    source: p.as_ref().to_path_buf(),
                     full_contents,
                     latest_save_offset,
                     section_rotation,
@@ -79,17 +80,17 @@ impl SaveFile {
 
                 Ok(save)
             } else {
-                eprintln!("Invalid file length for a game save. Found: {read_len}, Expected: {GAME_SAVE_DATA_LENGTH}");
+                log::error!("Invalid file length for a game save. Found: {read_len}, Expected: {GAME_SAVE_DATA_LENGTH}");
                 Err(std::io::ErrorKind::InvalidInput.into())
             }
         } else {
-            eprintln!("No file at path: {}", p.as_ref().display());
+            log::error!("No file at path: {}", p.as_ref().display());
             Err(std::io::ErrorKind::InvalidInput.into())
         }
     }
 
     fn get_offset_for_section(&self, section_id: u8) -> u64 {
-        let new_section_id = section_id + self.section_rotation;
+        let new_section_id = (section_id + self.section_rotation) % NUMBER_OF_SECTIONS;
         self.latest_save_offset + (SECTION_SIZE * new_section_id as u64)
     }
 
@@ -111,7 +112,7 @@ impl SaveFile {
         cursor.seek(SeekFrom::Start(section_offset + team_size_offset))?;
         let team_size = cursor.read_u32::<LittleEndian>()?;
 
-        let mut pk3_buffer = [0u8; crate::pokemon::PK3_SIZE_PARTY];
+        let mut pk3_buffer = [0u8; pokemon::PK3_SIZE_PARTY];
         (0..team_size)
             .map(|_| {
                 cursor.read_exact(&mut pk3_buffer)?;
@@ -132,7 +133,7 @@ impl SaveFile {
     }
 
     pub fn verify_sections(&self) -> io::Result<()> {
-        for section_id in 0..14 {
+        for section_id in 0..NUMBER_OF_SECTIONS {
             let section_offset = self.get_offset_for_section(section_id) as usize;
             let section_data =
                 &self.full_contents[section_offset..section_offset + SECTION_SIZE as usize];
@@ -143,7 +144,7 @@ impl SaveFile {
             let actual_checksum = cursor.read_u16::<LittleEndian>()?;
 
             if checksum != actual_checksum {
-                eprintln!("Computed checksum 0x{checksum:x} for section {section_id}, but checksum was 0x{actual_checksum:x}");
+                log::error!("Computed checksum 0x{checksum:x} for section {section_id}, but checksum was 0x{actual_checksum:x}");
                 return Err(std::io::ErrorKind::InvalidData.into());
             }
         }
@@ -152,7 +153,7 @@ impl SaveFile {
     }
 
     fn recompute_checksums(&mut self) -> io::Result<()> {
-        for section_id in 0..14 {
+        for section_id in 0..NUMBER_OF_SECTIONS {
             let section_offset = self.get_offset_for_section(section_id) as usize;
             let section_data =
                 &mut self.full_contents[section_offset..section_offset + SECTION_SIZE as usize];
@@ -179,10 +180,12 @@ impl SaveFile {
             compute_section_id_and_offset_for_box_slot(box_number, slot_number).unwrap();
         let section_offset = self.get_offset_for_section(section_id) as usize;
         if relative_offset + pokemon::PK3_SIZE_BOX > SECTION_DATA_SIZE {
+            log::debug!("Retrieving straddling PK3 at box {box_number} position {slot_number}");
             let start_section_id = section_id;
             let mut pk3_data = vec![0u8; pokemon::PK3_SIZE_BOX];
 
             // First read from the first section up until the end of the section data
+            log::debug!("Straddling sections, first section id {start_section_id}");
             let section_offset = self.get_offset_for_section(start_section_id) as usize;
             let bytes_from_first_section = SECTION_DATA_SIZE - relative_offset;
             pk3_data[..bytes_from_first_section].copy_from_slice(
@@ -192,7 +195,11 @@ impl SaveFile {
 
             // Next we grab the trailing part and copy that as well
             let bytes_from_next_section = pokemon::PK3_SIZE_BOX - bytes_from_first_section;
-            let section_offset = self.get_offset_for_section(start_section_id + 1) as usize;
+            let next_section_id = (start_section_id + 1) % NUMBER_OF_SECTIONS;
+            log::debug!("Straddling sections, second section id {next_section_id}");
+            let section_offset = self.get_offset_for_section(next_section_id) as usize;
+
+            log::debug!("Copied {bytes_from_first_section} bytes, remaining {bytes_from_next_section} at offset {section_offset:x}");
             pk3_data[bytes_from_first_section..].copy_from_slice(
                 &self.full_contents[section_offset..section_offset + bytes_from_next_section],
             );
@@ -204,6 +211,7 @@ impl SaveFile {
                 Ok(None)
             }
         } else {
+            log::debug!("Getting contiguous PK3 data from box {box_number} position {slot_number}");
             let pk3_offset = section_offset + relative_offset;
             let pk3_data = &self.full_contents[pk3_offset..pk3_offset + pokemon::PK3_SIZE_BOX];
             if pk3_data.iter().any(|byte| *byte != 0x00) {
@@ -239,6 +247,11 @@ impl SaveFile {
         force: bool,
     ) -> io::Result<bool> {
         if pk3_data.len() != pokemon::PK3_SIZE_BOX {
+            log::error!(
+                "Expected {}, got {} bytes for pk3 data format",
+                pokemon::PK3_SIZE_BOX,
+                pk3_data.len()
+            );
             return Err(io::ErrorKind::InvalidInput.into());
         }
 
@@ -247,6 +260,9 @@ impl SaveFile {
         let section_offset = self.get_offset_for_section(section_id) as usize;
 
         if relative_offset + pokemon::PK3_SIZE_BOX > SECTION_DATA_SIZE {
+            log::debug!(
+                "This PK3 straddles a section {section_id} at section offset {section_offset}"
+            );
             let bytes_from_first_section = SECTION_DATA_SIZE - relative_offset;
             let bytes_from_next_section = pokemon::PK3_SIZE_BOX - bytes_from_first_section;
 
@@ -327,6 +343,11 @@ impl SaveFile {
         self.recompute_checksums()?;
         std::fs::write(filepath, self.full_contents)
     }
+
+    pub fn write_in_place(self) -> io::Result<()> {
+        let source_file = self.source.clone();
+        self.write_to_file(source_file)
+    }
 }
 
 fn determine_latest_game_save_offset(save_data: &[u8]) -> std::io::Result<u64> {
@@ -336,6 +357,9 @@ fn determine_latest_game_save_offset(save_data: &[u8]) -> std::io::Result<u64> {
 
     cursor.seek(SeekFrom::Start(SAVE_B_OFFSET + SAVE_INDEX_OFFSET))?;
     let save_index_b = cursor.read_u32::<LittleEndian>()?;
+
+    log::debug!("Save Index A: {save_index_a}");
+    log::debug!("Save Index B: {save_index_b}");
 
     let offset = if save_index_a == 0xffffffff {
         SAVE_B_OFFSET
@@ -351,9 +375,10 @@ fn determine_latest_game_save_offset(save_data: &[u8]) -> std::io::Result<u64> {
 fn determine_section_rotation(save_offset: u64, save_data: &[u8]) -> io::Result<u8> {
     let mut cursor = Cursor::new(save_data);
     cursor.seek(SeekFrom::Start(save_offset + 0x0ff4))?;
-    let section_id = cursor.read_u16::<LittleEndian>()?;
-    let section_rotation = (14 - section_id) % 14;
-    Ok(section_rotation as u8)
+    let section_id = cursor.read_u16::<LittleEndian>()? as u8;
+    let section_rotation = (NUMBER_OF_SECTIONS - section_id) % NUMBER_OF_SECTIONS;
+    log::debug!("Current section rotation is {section_rotation}");
+    Ok(section_rotation)
 }
 
 fn compute_section_checksum(data: &[u8]) -> io::Result<u16> {

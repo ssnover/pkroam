@@ -10,5 +10,6 @@ path = "src/bin/pkinspect.rs"
 [dependencies]
 byteorder = "1.4"
 clap = { version = "4.3", features = ["derive"] }
+log = "0.4"
 num-derive = "0.3"
 num-traits = "0.2"

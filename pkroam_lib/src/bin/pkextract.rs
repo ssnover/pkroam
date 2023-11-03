@@ -17,7 +17,7 @@ struct Cli {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
     let mut save_file = SaveFile::new(&args.sav)?;
-    save_file.verify_sections()?;
+    //save_file.verify_sections()?;
 
     match save_file.take_pokemon_from_box(args.box_number, args.slot)? {
         Some(pokemon) => {

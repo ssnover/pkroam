@@ -4,6 +4,9 @@ use std::{
     io::{Cursor, Read, Seek, SeekFrom, Write},
 };
 
+pub mod species;
+use species::Species;
+
 use super::{decode_text, TrainerId};
 
 pub const PK3_SIZE_PARTY: usize = 100;
@@ -28,7 +31,7 @@ pub struct Pokemon {
     pub nickname: String,
     pub origin_language: Language,
     pub original_trainer_name: String,
-    pub species: u16,
+    pub species: Species,
     pub experience: u32,
     pub moves: [u16; 4],
     pub evs: [u8; 6],
@@ -112,7 +115,7 @@ impl Pokemon {
             nickname,
             origin_language: language,
             original_trainer_name,
-            species,
+            species: Species::try_from(species)?,
             experience,
             moves,
             evs,
