@@ -6,7 +6,10 @@ use std::{
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
 use super::{decode_text, TrainerId};
-use crate::{pk3 as pokemon, Pokemon};
+use crate::{
+    pk3::{self as pokemon, species::Species},
+    Pokemon,
+};
 
 pub struct SaveFile {
     source: PathBuf,
@@ -31,6 +34,39 @@ pub enum GameCode {
     RubySapphire,
     FireRedLeafGreen,
     Emerald,
+}
+
+impl GameCode {
+    fn team_size_offset(&self) -> u64 {
+        match self {
+            GameCode::RubySapphire | GameCode::Emerald => 0x0234,
+            GameCode::FireRedLeafGreen => 0x0034,
+        }
+    }
+
+    fn pokedex_owned(&self) -> u64 {
+        0x0028
+    }
+
+    fn pokedex_seen_a(&self) -> u64 {
+        0x005c
+    }
+
+    fn pokedex_seen_b(&self) -> u64 {
+        match self {
+            GameCode::RubySapphire => 0x0938,
+            GameCode::Emerald => 0x0988,
+            GameCode::FireRedLeafGreen => 0x05f8,
+        }
+    }
+
+    fn pokedex_seen_c(&self) -> u64 {
+        match self {
+            GameCode::RubySapphire => 0x0c0c,
+            GameCode::Emerald => 0x0ca4,
+            GameCode::FireRedLeafGreen => 0x0b98,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -105,10 +141,7 @@ impl SaveFile {
     pub fn get_party(&self) -> io::Result<Vec<Pokemon>> {
         let section_offset = self.get_offset_for_section(1);
         let mut cursor = Cursor::new(&self.full_contents[..]);
-        let team_size_offset = match self.game_code.unwrap() {
-            GameCode::RubySapphire | GameCode::Emerald => 0x0234,
-            GameCode::FireRedLeafGreen => 0x0034,
-        };
+        let team_size_offset = self.game_code.unwrap().team_size_offset();
         cursor.seek(SeekFrom::Start(section_offset + team_size_offset))?;
         let team_size = cursor.read_u32::<LittleEndian>()?;
 
@@ -255,6 +288,9 @@ impl SaveFile {
             return Err(io::ErrorKind::InvalidInput.into());
         }
 
+        let pk3_species = Pokemon::from_pk3(pk3_data)?.species;
+        self.mark_pokemon_owned_in_dex(pk3_species)?;
+
         let (section_id, relative_offset) =
             compute_section_id_and_offset_for_box_slot(box_number, slot_number).unwrap();
         let section_offset = self.get_offset_for_section(section_id) as usize;
@@ -337,6 +373,39 @@ impl SaveFile {
             },
             game_code,
         ))
+    }
+
+    fn mark_pokemon_owned_in_dex(&mut self, species: Species) -> io::Result<()> {
+        let bit_position = species.national_dex_number()? - 1;
+        let byte_number = bit_position >> 3;
+        let bit_position = bit_position & 0b111;
+
+        let section_offset = self.get_offset_for_section(0);
+        let pokedex_owned_offset = section_offset + self.game_code.unwrap().pokedex_owned();
+        let pokedex_seen_a_offset = section_offset + self.game_code.unwrap().pokedex_seen_a();
+        let section_offset = self.get_offset_for_section(1);
+        let pokedex_seen_b_offset = section_offset + self.game_code.unwrap().pokedex_seen_b();
+        let section_offset = self.get_offset_for_section(4);
+        let pokedex_seen_c_offset = section_offset + self.game_code.unwrap().pokedex_seen_c();
+
+        let pokedex_offsets = [
+            pokedex_owned_offset,
+            pokedex_seen_a_offset,
+            pokedex_seen_b_offset,
+            pokedex_seen_c_offset,
+        ];
+
+        let mut cursor = std::io::Cursor::new(&mut self.full_contents[..]);
+
+        for offset in pokedex_offsets {
+            cursor.set_position(offset + byte_number as u64);
+            let mut current_byte = cursor.read_u8()?;
+            current_byte |= 1 << bit_position;
+            cursor.set_position(offset + byte_number as u64);
+            cursor.write_u8(current_byte)?;
+        }
+
+        Ok(())
     }
 
     pub fn write_to_file(mut self, filepath: impl AsRef<Path>) -> io::Result<()> {
