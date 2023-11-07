@@ -182,7 +182,7 @@ impl SaveFile {
         if relative_offset + pokemon::PK3_SIZE_BOX > SECTION_DATA_SIZE {
             log::debug!("Retrieving straddling PK3 at box {box_number} position {slot_number}");
             let start_section_id = section_id;
-            let mut pk3_data = vec![0u8; pokemon::PK3_SIZE_BOX];
+            let mut pk3_data = [0u8; pokemon::PK3_SIZE_BOX];
 
             // First read from the first section up until the end of the section data
             log::debug!("Straddling sections, first section id {start_section_id}");
