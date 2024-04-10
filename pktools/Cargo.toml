@@ -1,0 +1,17 @@
+[package]
+name = "pktools"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "pktools"
+path = "src/bin/main.rs"
+
+[dependencies]
+clap = { version = "4.3", features = ["derive"] }
+env_logger = "0.11"
+log = "0.4"
+pkroam = { path = "../pkroam" }
+
+[dev-dependencies]
+tempfile = "3.10"

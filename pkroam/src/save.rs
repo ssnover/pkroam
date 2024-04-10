@@ -208,6 +208,7 @@ impl SaveFile {
         // Some Pokemon data falls cleanly into a single memory section, some Pokemon data is
         // partitioned over multiple sections (with metadata in between and maybe wrapped
         // around thanks to the section rotation)
+        log::trace!("Getting pokemon from box {box_number}-{slot_number}");
 
         let (section_id, relative_offset) =
             compute_section_id_and_offset_for_box_slot(box_number, slot_number).unwrap();
@@ -239,6 +240,7 @@ impl SaveFile {
 
             // Now we can check if there's even valid data here and attempt to parse
             if pk3_data.iter().any(|byte| *byte != 0x00) {
+                log::trace!("Parsing PK3 from non-contiguous data");
                 Ok(Some(Pokemon::from_pk3(&pk3_data[..])?))
             } else {
                 Ok(None)
@@ -248,6 +250,7 @@ impl SaveFile {
             let pk3_offset = section_offset + relative_offset;
             let pk3_data = &self.full_contents[pk3_offset..pk3_offset + pokemon::PK3_SIZE_BOX];
             if pk3_data.iter().any(|byte| *byte != 0x00) {
+                log::trace!("Parsing PK3 from contiguous data");
                 Ok(Some(Pokemon::from_pk3(pk3_data)?))
             } else {
                 Ok(None)
@@ -260,6 +263,7 @@ impl SaveFile {
         box_number: u8,
         slot_number: u8,
     ) -> io::Result<Option<Pokemon>> {
+        log::trace!("Taking pokemon from box {box_number}-{slot_number}");
         let pkmn = self.get_pokemon_from_box(box_number, slot_number)?;
         self.clear_box_position(box_number, slot_number)?;
         self.recompute_checksums()?;
@@ -267,6 +271,7 @@ impl SaveFile {
     }
 
     fn clear_box_position(&mut self, box_number: u8, slot_number: u8) -> io::Result<()> {
+        log::trace!("Clearing box position {box_number}-{slot_number}");
         let cleared_pk3 = [0u8; pokemon::PK3_SIZE_BOX];
         let _ = self.put_pokemon_in_box(box_number, slot_number, &cleared_pk3, true)?;
         Ok(())
@@ -288,8 +293,9 @@ impl SaveFile {
             return Err(io::ErrorKind::InvalidInput.into());
         }
 
-        let pk3_species = Pokemon::from_pk3(pk3_data)?.species;
-        self.mark_pokemon_owned_in_dex(pk3_species)?;
+        if let Ok(pk3) = Pokemon::from_pk3(pk3_data) {
+            self.mark_pokemon_owned_in_dex(pk3.species)?;
+        }
 
         let (section_id, relative_offset) =
             compute_section_id_and_offset_for_box_slot(box_number, slot_number).unwrap();

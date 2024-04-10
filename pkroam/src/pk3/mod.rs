@@ -46,20 +46,29 @@ impl Pokemon {
         encrypt_decrypt_pk3(&mut source_data[..]);
 
         let mut cursor = Cursor::new(&source_data[..]);
+        log::trace!("Reading personality value");
         let personality_value = cursor.read_u32::<LittleEndian>()?;
+        log::trace!("Reading OT id");
         let original_trainer_id = cursor.read_u32::<LittleEndian>()?;
         let public_id = (original_trainer_id & 0xffff) as u16;
         let secret_id = (original_trainer_id >> 16) as u16;
         let mut nickname = [0u8; 10];
+        log::trace!("Reading nickname");
         cursor.read_exact(&mut nickname)?;
         let nickname = decode_text(&nickname);
+        log::trace!("Reading language");
         let language = Language::try_from(cursor.read_u8()?)?;
+        log::trace!("Reading egg data");
         let _egg_data = EggData::try_from(cursor.read_u8()?).unwrap();
         let mut original_trainer_name = [0u8; 7];
+        log::trace!("Reading OT name");
         cursor.read_exact(&mut original_trainer_name)?;
         let original_trainer_name = decode_text(&original_trainer_name);
+        log::trace!("Reading markings");
         let _markings = cursor.read_u8()?;
+        log::trace!("Reading checksum");
         let _checksum = cursor.read_u16::<LittleEndian>()?;
+        log::trace!("Reading _");
         let _ = cursor.read_u16::<LittleEndian>()?;
 
         let offset =
