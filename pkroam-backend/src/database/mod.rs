@@ -1,12 +1,10 @@
-use num_traits::{FromPrimitive, ToPrimitive};
+use crate::types::{GameSaveData, MonsterData};
 use rusqlite::Connection;
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
-use types::{Game, GameSave, GameSaveData};
+use std::path::Path;
 
+mod internal_types;
 mod migrations;
 mod statements;
-pub mod types;
 
 const CURRENT_DATABASE_SCHEMA_VERSION: i32 = 3;
 
@@ -55,93 +53,72 @@ impl DbConn {
         Ok(())
     }
 
-    pub fn get_save(&self, save_id: u32) -> rusqlite::Result<GameSave> {
+    pub fn get_save(&self, save_id: u32) -> anyhow::Result<GameSaveData> {
         self.conn
-            .query_row_and_then(statements::SELECT_SAVE, (save_id,), |row| {
-                Ok(GameSave::new(
-                    row.get(0)?,
-                    GameSaveData::new(
-                        Game::from_u32(row.get(1)?).unwrap(),
-                        row.get::<_, String>(2)?.as_str(),
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                        row.get(6)?,
-                        row.get(7)?,
-                        PathBuf::from_str(row.get::<_, String>(8)?.as_str()).unwrap(),
-                        row.get::<_, i32>(9)? != 0,
-                    ),
-                ))
-            })
+            .query_row_and_then(
+                statements::SELECT_SAVE,
+                (save_id,),
+                internal_types::Save::from_row,
+            )?
+            .try_into()
     }
 
-    pub fn get_saves(&self) -> rusqlite::Result<Vec<GameSave>> {
+    pub fn get_saves(&self) -> anyhow::Result<Vec<GameSaveData>> {
         let mut stmt = self.conn.prepare(statements::SELECT_SAVES)?;
-        let iter = stmt.query_map([], |row| {
-            let trainer_name: String = row.get(2)?;
-            let save_path: String = row.get(8)?;
-            Ok(GameSave::new(
-                row.get(0)?,
-                GameSaveData::new(
-                    Game::from_u32(row.get(1)?).unwrap(),
-                    &trainer_name,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
-                    row.get(7)?,
-                    PathBuf::from_str(&save_path).unwrap(),
-                    row.get::<_, i32>(9)? != 0,
-                ),
-            ))
-        })?;
-        iter.collect::<rusqlite::Result<Vec<_>>>()
+        let saves = stmt
+            .query_map([], internal_types::Save::from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        saves.into_iter().map(|save| save.try_into()).collect()
     }
 
-    pub fn add_new_save(&self, save: &GameSaveData) -> rusqlite::Result<()> {
+    pub fn add_new_save(&self, save: &GameSaveData) -> anyhow::Result<()> {
+        let save = internal_types::Save::from(save.clone());
         let _rows_changed = self.conn.execute(
             statements::INSERT_SAVE_INTO_SAVES,
             (
-                &save.game.to_u32(),
+                &save.game,
                 &save.trainer_name,
                 &save.trainer_id,
                 &save.secret_id,
-                &save.playtime.hours,
-                &save.playtime.minutes,
-                &save.playtime.frames,
-                &save.save_path.to_string_lossy(),
-                1,
+                &save.playtime_hours,
+                &save.playtime_minutes,
+                &save.playtime_frames,
+                &save.save_path,
+                &save.connected,
             ),
         )?;
         Ok(())
     }
 
-    pub fn set_save_disconnected(&self, save_id: u32) -> rusqlite::Result<()> {
+    pub fn set_save_disconnected(&self, save_id: u32) -> anyhow::Result<()> {
         let _rows_changed = self
             .conn
             .execute(statements::UPDATE_SAVE_CONNECTED, (0, save_id))?;
         Ok(())
     }
 
-    pub fn insert_new_mon(
-        &self,
-        original_trainer_id: u32,
-        secret_trainer_id: u32,
-        personality_value: u32,
-        data: Vec<u8>,
-    ) -> rusqlite::Result<u32> {
+    pub fn insert_new_mon(&self, mon: &MonsterData) -> anyhow::Result<u32> {
+        let mon = internal_types::Monster::from(mon.clone());
         let _rows_changed = self.conn.execute(
             statements::INSERT_MON_INTO_MONS,
             (
-                &original_trainer_id,
-                &secret_trainer_id,
-                &personality_value,
-                &1,
-                data.as_slice(),
+                &mon.original_trainer_id,
+                &mon.original_secret_id,
+                &mon.personality_value,
+                &mon.data_format,
+                mon.data.as_slice(),
             ),
         )?;
         let row_id = self.conn.last_insert_rowid();
         Ok(row_id as u32)
+    }
+
+    pub fn get_all_mons(&self) -> anyhow::Result<Vec<MonsterData>> {
+        let mut stmt = self.conn.prepare(statements::SELECT_ALL_MONS)?;
+        let mons = stmt
+            .query_map([], internal_types::Monster::from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        mons.into_iter().map(|mon| mon.try_into()).collect()
     }
 }
 

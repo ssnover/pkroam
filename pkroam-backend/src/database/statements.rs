@@ -37,3 +37,5 @@ pub const CREATE_TABLE_ROAM_POKEMON: &str = "CREATE TABLE monsters (
 pub const INSERT_MON_INTO_MONS: &str = "INSERT INTO monsters (
     original_trainer_id, original_secret_id, personality_value, data_format, data)
     VALUES (?1, ?2, ?3, ?4, ?5)";
+
+pub const SELECT_ALL_MONS: &str = "SELECT id, original_trainer_id, original_secret_id, personality_value, data_format, data FROM monsters";

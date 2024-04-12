@@ -1,4 +1,7 @@
-use crate::database::DbConn;
+use crate::{
+    database::DbConn,
+    types::{DataFormat, MonsterData},
+};
 use prettytable::{format, row, Table};
 
 pub fn handle_deposit(
@@ -8,16 +11,12 @@ pub fn handle_deposit(
     box_position: u8,
 ) -> anyhow::Result<()> {
     let game_save = db_handle.get_save(save_id)?;
-    let mut save_file = pkroam::save::SaveFile::new(game_save.data.save_path.as_path())?;
+    let mut save_file = pkroam::save::SaveFile::new(game_save.save_path.as_path())?;
     if let Some(pokemon) = save_file.take_pokemon_from_box(box_number, box_position)? {
-        match save_file.write_to_file(game_save.data.save_path.as_path()) {
+        match save_file.write_to_file(game_save.save_path.as_path()) {
             Ok(()) => {
-                let pokemon_id = db_handle.insert_new_mon(
-                    pokemon.original_trainer_id.public_id.into(),
-                    pokemon.original_trainer_id.secret_id.into(),
-                    pokemon.personality_value,
-                    pokemon.to_pk3(),
-                )?;
+                let pokemon_id =
+                    db_handle.insert_new_mon(&MonsterData::from_pk3(&pokemon.to_pk3())?)?;
                 log::info!("Added with ID: {pokemon_id}");
             }
             Err(err) => {
@@ -44,17 +43,14 @@ pub fn handle_list_saves(db_handle: DbConn) -> anyhow::Result<()> {
         "PATH"
     ]);
 
-    for save in saves.iter().filter(|save| save.data.connected) {
+    for save in saves.iter().filter(|save| save.connected) {
         table.add_row(row![
-            save.id,
-            save.data.game,
-            save.data.trainer_name,
-            save.data.trainer_id,
-            format!(
-                "{:02}:{:02}",
-                save.data.playtime.hours, save.data.playtime.minutes
-            ),
-            save.data.save_path.display(),
+            save.id.expect("Saves coming from the database have an id"),
+            save.game,
+            save.trainer_name,
+            save.trainer_id,
+            format!("{:02}:{:02}", save.playtime.hours, save.playtime.minutes),
+            save.save_path.display(),
         ]);
     }
 
@@ -65,7 +61,7 @@ pub fn handle_list_saves(db_handle: DbConn) -> anyhow::Result<()> {
 pub fn handle_list_mons(db_handle: DbConn, save_id: Option<u32>) -> anyhow::Result<()> {
     if let Some(save_id) = save_id {
         let game_save = db_handle.get_save(save_id)?;
-        let save_file = pkroam::save::SaveFile::new(game_save.data.save_path.as_path())?;
+        let save_file = pkroam::save::SaveFile::new(game_save.save_path.as_path())?;
         let mut table = Table::new();
         table.set_format(*format::consts::FORMAT_NO_BORDER_LINE_SEPARATOR);
         table.add_row(row!["BOX", "SLOT", "POKEMON"]);
@@ -81,6 +77,25 @@ pub fn handle_list_mons(db_handle: DbConn, save_id: Option<u32>) -> anyhow::Resu
             })?;
             for (position, pkmn) in box_pkmn {
                 table.add_row(row![box_number, position, pkmn.species]);
+            }
+        }
+
+        table.printstd();
+    } else {
+        // Default to check the roam boxes
+        let mons = db_handle.get_all_mons()?;
+        let mut table = Table::new();
+        table.set_format(*format::consts::FORMAT_NO_BORDER_LINE_SEPARATOR);
+        table.add_row(row!["ID", "NATL DEX", "POKEMON"]);
+
+        for mon in mons.iter() {
+            if let DataFormat::PK3 = mon.data_format {
+                let pkmn = pkroam::pk3::Pokemon::from_pk3(&mon.data)?;
+                table.add_row(row![
+                    mon.id.expect("Monster data from database must have an id"),
+                    pkmn.species.national_dex_number()?,
+                    pkmn.species
+                ]);
             }
         }
 
