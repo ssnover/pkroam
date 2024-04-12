@@ -414,12 +414,12 @@ impl SaveFile {
         Ok(())
     }
 
-    pub fn write_to_file(mut self, filepath: impl AsRef<Path>) -> io::Result<()> {
+    pub fn write_to_file(&mut self, filepath: impl AsRef<Path>) -> io::Result<()> {
         self.recompute_checksums()?;
-        std::fs::write(filepath, self.full_contents)
+        std::fs::write(filepath, &self.full_contents)
     }
 
-    pub fn write_in_place(self) -> io::Result<()> {
+    pub fn write_in_place(&mut self) -> io::Result<()> {
         let source_file = self.source.clone();
         self.write_to_file(source_file)
     }

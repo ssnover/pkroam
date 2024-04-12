@@ -5,11 +5,31 @@ pub fn perform_migration(
     match starting_version {
         1 => migrate_from_1_to_2(db_conn),
         2 => migrate_from_2_to_3(db_conn),
+        3 => migrate_from_3_to_4(db_conn),
         ver => {
             log::error!("Request to migrate invalid database version {ver}");
             Err(rusqlite::Error::InvalidQuery)
         }
     }
+}
+
+fn migrate_from_3_to_4(db_conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {
+    log::debug!("Beginning migration 3 to 4");
+    let txn = db_conn.transaction()?;
+    let _ = txn.execute(
+        "CREATE TABLE box_entries (
+            box_number INTEGER,
+            box_position INTEGER,
+            monster_id INTEGER UNIQUE,
+            FOREIGN KEY (monster_id)
+                REFERENCES monsters (id)
+                ON UPDATE CASCADE
+                ON DELETE CASCADE,
+            UNIQUE (box_number, box_position)
+        )",
+        (),
+    )?;
+    txn.commit()
 }
 
 fn migrate_from_2_to_3(db_conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {

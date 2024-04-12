@@ -121,3 +121,37 @@ impl From<crate::types::MonsterData> for Monster {
         }
     }
 }
+
+#[derive(Clone, Debug)]
+pub struct BoxEntry {
+    pub box_number: u32,
+    pub box_position: u32,
+    pub monster_id: u64,
+}
+
+impl BoxEntry {
+    pub fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            box_number: row.get(0)?,
+            box_position: row.get(1)?,
+            monster_id: row.get(2)?,
+        })
+    }
+}
+
+impl TryInto<crate::types::BoxLocation> for BoxEntry {
+    type Error = anyhow::Error;
+    fn try_into(self) -> Result<crate::types::BoxLocation, Self::Error> {
+        crate::types::BoxLocation::new(self.box_number, self.box_position, Some(self.monster_id))
+    }
+}
+
+impl From<(crate::types::BoxLocation, u64)> for BoxEntry {
+    fn from((location, monster_id): (crate::types::BoxLocation, u64)) -> Self {
+        Self {
+            box_number: location.box_number(),
+            box_position: location.box_position(),
+            monster_id: monster_id,
+        }
+    }
+}

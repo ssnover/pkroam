@@ -450,6 +450,7 @@ dependencies = [
  "anyhow",
  "clap",
  "directories",
+ "env_logger",
  "log",
  "num-derive",
  "num-traits",

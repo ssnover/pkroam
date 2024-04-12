@@ -35,5 +35,6 @@ pub fn initialize(enable_debug: bool, log_dir: impl AsRef<Path>) -> io::Result<(
     std::fs::copy(&current_log_file_path, last_log_file_path)?;
 
     std::fs::File::create(&current_log_file_path)?;
+    println!("Logging to file: {}", current_log_file_path.display());
     simple_logging::log_to_file(&current_log_file_path, log_level)
 }

@@ -173,3 +173,44 @@ impl Into<u32> for DataFormat {
         }
     }
 }
+
+#[derive(Clone, Debug)]
+pub struct BoxLocation {
+    box_number: u32,
+    box_position: u32,
+    monster_id: Option<u64>,
+}
+
+impl BoxLocation {
+    pub fn new(
+        box_number: u32,
+        box_position: u32,
+        monster_id: Option<u64>,
+    ) -> anyhow::Result<Self> {
+        if box_number == 0 {
+            Err(anyhow::anyhow!("Box number must be greater than 0"))
+        } else if box_position == 0 || box_position > 30 {
+            Err(anyhow::anyhow!(
+                "Invalid box position {box_position}, must be in [1, 30]"
+            ))
+        } else {
+            Ok(Self {
+                box_number,
+                box_position,
+                monster_id,
+            })
+        }
+    }
+
+    pub fn box_number(&self) -> u32 {
+        self.box_number
+    }
+
+    pub fn box_position(&self) -> u32 {
+        self.box_position
+    }
+
+    pub fn monster_id(&self) -> Option<u64> {
+        self.monster_id
+    }
+}

@@ -1,4 +1,4 @@
-use crate::types::{GameSaveData, MonsterData};
+use crate::types::{BoxLocation, GameSaveData, MonsterData};
 use rusqlite::Connection;
 use std::path::Path;
 
@@ -6,7 +6,7 @@ mod internal_types;
 mod migrations;
 mod statements;
 
-const CURRENT_DATABASE_SCHEMA_VERSION: i32 = 3;
+const CURRENT_DATABASE_SCHEMA_VERSION: i32 = 4;
 
 pub struct DbConn {
     conn: Connection,
@@ -36,6 +36,8 @@ impl DbConn {
         self.conn.execute(statements::CREATE_TABLE_SAVES, ())?;
         self.conn
             .execute(statements::CREATE_TABLE_ROAM_POKEMON, ())?;
+        self.conn
+            .execute(statements::CREATE_TABLE_BOX_ENTRIES, ())?;
 
         set_schema_version(&self.conn, CURRENT_DATABASE_SCHEMA_VERSION)
     }
@@ -51,6 +53,17 @@ impl DbConn {
         set_schema_version(&self.conn, target_version)?;
         log::info!("Migrated database from version {current_version} to version {target_version}");
         Ok(())
+    }
+
+    fn with_transaction<T, F>(&mut self, op: F) -> anyhow::Result<T>
+    where
+        T: std::fmt::Debug + Clone,
+        F: FnOnce(&rusqlite::Transaction) -> anyhow::Result<T>,
+    {
+        let txn = self.conn.transaction()?;
+        let res = op(&txn)?;
+        txn.commit()?;
+        Ok(res)
     }
 
     pub fn get_save(&self, save_id: u32) -> anyhow::Result<GameSaveData> {
@@ -97,20 +110,35 @@ impl DbConn {
         Ok(())
     }
 
-    pub fn insert_new_mon(&self, mon: &MonsterData) -> anyhow::Result<u32> {
+    pub fn insert_new_mon(
+        &mut self,
+        mon: &MonsterData,
+        location: BoxLocation,
+    ) -> anyhow::Result<u64> {
         let mon = internal_types::Monster::from(mon.clone());
-        let _rows_changed = self.conn.execute(
-            statements::INSERT_MON_INTO_MONS,
-            (
-                &mon.original_trainer_id,
-                &mon.original_secret_id,
-                &mon.personality_value,
-                &mon.data_format,
-                mon.data.as_slice(),
-            ),
-        )?;
-        let row_id = self.conn.last_insert_rowid();
-        Ok(row_id as u32)
+        self.with_transaction(|txn| {
+            let _rows_changed = txn.execute(
+                statements::INSERT_MON_INTO_MONS,
+                (
+                    &mon.original_trainer_id,
+                    &mon.original_secret_id,
+                    &mon.personality_value,
+                    &mon.data_format,
+                    mon.data.as_slice(),
+                ),
+            )?;
+            let row_id = txn.last_insert_rowid();
+            let location = internal_types::BoxEntry::from((location.clone(), row_id as u64));
+            let _ = txn.execute(
+                statements::INSERT_BOX_ENTRY,
+                (
+                    location.box_number,
+                    location.box_position,
+                    location.monster_id,
+                ),
+            )?;
+            Ok(row_id as u64)
+        })
     }
 
     pub fn get_all_mons(&self) -> anyhow::Result<Vec<MonsterData>> {
@@ -119,6 +147,25 @@ impl DbConn {
             .query_map([], internal_types::Monster::from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         mons.into_iter().map(|mon| mon.try_into()).collect()
+    }
+
+    pub fn withdraw_mon(&mut self, id: u64) -> anyhow::Result<(MonsterData, BoxLocation)> {
+        let (monster, entry) = self.with_transaction(|txn| {
+            let monster = txn.query_row_and_then(
+                statements::SELECT_MON_WITH_ID,
+                (id,),
+                internal_types::Monster::from_row,
+            )?;
+            let entry = txn.query_row_and_then(
+                statements::SELECT_BOX_ENTRY_WITH_MONSTER_ID,
+                (id,),
+                internal_types::BoxEntry::from_row,
+            )?;
+            let _rows_changed = txn.execute(statements::DELETE_MON_WITH_ID, (id,))?;
+            Ok((monster, entry))
+        })?;
+
+        Ok((monster.try_into()?, entry.try_into()?))
     }
 }
 

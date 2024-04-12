@@ -39,3 +39,25 @@ pub const INSERT_MON_INTO_MONS: &str = "INSERT INTO monsters (
     VALUES (?1, ?2, ?3, ?4, ?5)";
 
 pub const SELECT_ALL_MONS: &str = "SELECT id, original_trainer_id, original_secret_id, personality_value, data_format, data FROM monsters";
+
+pub const SELECT_MON_WITH_ID: &str = "SELECT id, original_trainer_id, original_secret_id, personality_value, data_format, data FROM monsters
+    WHERE id = ?";
+
+pub const DELETE_MON_WITH_ID: &str = "DELETE FROM monsters WHERE id = ?";
+
+pub const CREATE_TABLE_BOX_ENTRIES: &str = "CREATE TABLE box_entries (
+    box_number INTEGER,
+    box_position INTEGER,
+    monster_id INTEGER UNIQUE,
+    FOREIGN KEY (monster_id)
+        REFERENCES monsters (id)
+        ON UPDATE CASCADE
+        ON DELETE CASCADE,
+    UNIQUE (box_number, box_position)
+)";
+
+pub const INSERT_BOX_ENTRY: &str =
+    "INSERT INTO box_entries (box_number, box_position, monster_id) VALUES (?1, ?2, ?3)";
+
+pub const SELECT_BOX_ENTRY_WITH_MONSTER_ID: &str =
+    "SELECT box_number, box_position, monster_id FROM box_entries WHERE monster_id = ?";

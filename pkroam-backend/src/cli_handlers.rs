@@ -1,23 +1,39 @@
 use crate::{
     database::DbConn,
-    types::{DataFormat, MonsterData},
+    types::{BoxLocation, DataFormat, MonsterData},
 };
 use prettytable::{format, row, Table};
 
 pub fn handle_deposit(
-    db_handle: DbConn,
+    mut db_handle: DbConn,
     save_id: u32,
     box_number: u8,
     box_position: u8,
+    dest_box: u32,
+    dest_position: u32,
 ) -> anyhow::Result<()> {
     let game_save = db_handle.get_save(save_id)?;
     let mut save_file = pkroam::save::SaveFile::new(game_save.save_path.as_path())?;
+    let dest = BoxLocation::new(dest_box, dest_position, None)?;
     if let Some(pokemon) = save_file.take_pokemon_from_box(box_number, box_position)? {
-        match save_file.write_to_file(game_save.save_path.as_path()) {
+        match save_file.write_in_place() {
             Ok(()) => {
-                let pokemon_id =
-                    db_handle.insert_new_mon(&MonsterData::from_pk3(&pokemon.to_pk3())?)?;
-                log::info!("Added with ID: {pokemon_id}");
+                let pk3_data = pokemon.to_pk3();
+                match db_handle.insert_new_mon(&MonsterData::from_pk3(&pk3_data)?, dest) {
+                    Ok(pkmn_id) => {
+                        log::info!("Added with ID: {pkmn_id}");
+                    }
+                    Err(err) => {
+                        log::error!("Failed to insert mon into database: {err}");
+                        save_file
+                            .put_pokemon_in_box(box_number, box_position, &pk3_data, true)
+                            .map_err(|err| {
+                                log::error!("Failed to replace mon into save file: {err}");
+                                err
+                            })?;
+                        save_file.write_in_place()?;
+                    }
+                }
             }
             Err(err) => {
                 log::error!("Unable to update save file: {err}");
@@ -102,4 +118,42 @@ pub fn handle_list_mons(db_handle: DbConn, save_id: Option<u32>) -> anyhow::Resu
         table.printstd();
     }
     Ok(())
+}
+
+pub fn handle_withdraw(
+    mut db_handle: DbConn,
+    monster_id: u64,
+    save_id: u32,
+    box_number: u8,
+    box_position: u8,
+) -> anyhow::Result<()> {
+    let game_save = db_handle.get_save(save_id)?;
+    let mut save_file = pkroam::save::SaveFile::new(game_save.save_path.as_path())?;
+
+    match save_file.get_pokemon_from_box(box_number, box_position)? {
+        Some(_) => {
+            Err(anyhow::anyhow!("The selected save file has a pokemon in box {box_number} position {box_position} already"))
+        },
+        None => {
+            let (pkmn_data, location) = db_handle.withdraw_mon(monster_id)?;
+            let pkmn = pkroam::pk3::Pokemon::from_pk3(&pkmn_data.data)?;
+            let res = {
+                save_file.put_pokemon_in_box(box_number, box_position, &pkmn_data.data, false)?;
+            save_file.write_in_place()?;
+            Ok(())
+            };
+            match res {
+                Ok(()) => log::info!("Withdrew {}", pkmn.species),
+                Err(err) => {
+                    log::error!("Failed to write mon into save file: {err:?}");
+                    let _ = db_handle.insert_new_mon(&pkmn_data, location).map_err(|err| {
+                        log::error!("Failed to replace mon in database: {err:?}");
+                        err
+                    });
+                    err
+                }
+            }
+            Ok(())
+        }
+    }
 }
