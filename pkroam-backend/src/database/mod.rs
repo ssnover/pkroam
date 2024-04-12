@@ -13,7 +13,7 @@ pub struct DbConn {
 }
 
 impl DbConn {
-    pub fn new(db_path: impl AsRef<Path>) -> rusqlite::Result<Self> {
+    pub fn new(db_path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let conn = Connection::open(db_path)?;
         let schema_version = get_schema_version(&conn)?;
         log::debug!("Schema version at start: {schema_version}");
@@ -32,25 +32,30 @@ impl DbConn {
         Ok(conn)
     }
 
-    fn initialize_database(&self) -> rusqlite::Result<()> {
-        self.conn.execute(statements::CREATE_TABLE_SAVES, ())?;
-        self.conn
-            .execute(statements::CREATE_TABLE_ROAM_POKEMON, ())?;
-        self.conn
-            .execute(statements::CREATE_TABLE_BOX_ENTRIES, ())?;
+    fn initialize_database(&mut self) -> anyhow::Result<()> {
+        self.with_transaction(|txn| {
+            txn.execute(statements::CREATE_TABLE_SAVES, ())?;
+            txn.execute(statements::CREATE_TABLE_ROAM_POKEMON, ())?;
+            txn.execute(statements::CREATE_TABLE_BOX_ENTRIES, ())?;
 
-        set_schema_version(&self.conn, CURRENT_DATABASE_SCHEMA_VERSION)
+            set_schema_version(txn, CURRENT_DATABASE_SCHEMA_VERSION)?;
+            Ok(())
+        })
     }
 
     fn migrate_database(
         &mut self,
         current_version: i32,
         target_version: i32,
-    ) -> rusqlite::Result<()> {
-        for version in current_version..target_version {
-            migrations::perform_migration(&mut self.conn, version)?;
-        }
-        set_schema_version(&self.conn, target_version)?;
+    ) -> anyhow::Result<()> {
+        self.with_transaction(|txn| {
+            for version in current_version..target_version {
+                migrations::perform_migration(txn, version)?;
+            }
+            set_schema_version(txn, target_version)?;
+            Ok(())
+        })?;
+
         log::info!("Migrated database from version {current_version} to version {target_version}");
         Ok(())
     }
@@ -173,6 +178,6 @@ fn get_schema_version(conn: &Connection) -> rusqlite::Result<i32> {
     conn.pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))
 }
 
-fn set_schema_version(conn: &Connection, schema_version: i32) -> rusqlite::Result<()> {
-    conn.pragma_update(None, "user_version", schema_version)
+fn set_schema_version(txn: &rusqlite::Transaction, schema_version: i32) -> rusqlite::Result<()> {
+    txn.pragma_update(None, "user_version", schema_version)
 }

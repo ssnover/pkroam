@@ -1,11 +1,11 @@
 pub fn perform_migration(
-    db_conn: &mut rusqlite::Connection,
+    txn: &rusqlite::Transaction,
     starting_version: i32,
 ) -> rusqlite::Result<()> {
     match starting_version {
-        1 => migrate_from_1_to_2(db_conn),
-        2 => migrate_from_2_to_3(db_conn),
-        3 => migrate_from_3_to_4(db_conn),
+        1 => migrate_from_1_to_2(txn),
+        2 => migrate_from_2_to_3(txn),
+        3 => migrate_from_3_to_4(txn),
         ver => {
             log::error!("Request to migrate invalid database version {ver}");
             Err(rusqlite::Error::InvalidQuery)
@@ -13,9 +13,8 @@ pub fn perform_migration(
     }
 }
 
-fn migrate_from_3_to_4(db_conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {
+fn migrate_from_3_to_4(txn: &rusqlite::Transaction) -> rusqlite::Result<()> {
     log::debug!("Beginning migration 3 to 4");
-    let txn = db_conn.transaction()?;
     let _ = txn.execute(
         "CREATE TABLE box_entries (
             box_number INTEGER,
@@ -29,12 +28,11 @@ fn migrate_from_3_to_4(db_conn: &mut rusqlite::Connection) -> rusqlite::Result<(
         )",
         (),
     )?;
-    txn.commit()
+    Ok(())
 }
 
-fn migrate_from_2_to_3(db_conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {
+fn migrate_from_2_to_3(txn: &rusqlite::Transaction) -> rusqlite::Result<()> {
     log::debug!("Beginning migration 2 to 3");
-    let txn = db_conn.transaction()?;
     let _row_changed = txn.execute(
         "CREATE TABLE monsters (
         id INTEGER PRIMARY KEY,
@@ -46,12 +44,11 @@ fn migrate_from_2_to_3(db_conn: &mut rusqlite::Connection) -> rusqlite::Result<(
     )",
         (),
     )?;
-    txn.commit()
+    Ok(())
 }
 
-fn migrate_from_1_to_2(db_conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {
+fn migrate_from_1_to_2(txn: &rusqlite::Transaction) -> rusqlite::Result<()> {
     log::debug!("Beginning migration 1 to 2");
-    let txn = db_conn.transaction()?;
     let _row_changed = txn.execute("ALTER TABLE saves ADD COLUMN connected DEFAULT 1", ())?;
-    txn.commit()
+    Ok(())
 }
